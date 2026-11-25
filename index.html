@@ -50,6 +50,21 @@
   .cell.pick { box-shadow: inset 0 0 0 3px var(--brand); }
   @keyframes pop { 40% { transform: scale(1.18); } }
   .grid.editable .cell { cursor: pointer; }
+  .cell.emptyc { background: #FFF; border: 2px dashed #FDBA74; }
+  .cell.miss { background: #F3F4F6; color: #9CA3AF; }
+  .cell.miss::after { content: "✕"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(220, 38, 38, .8); font-size: 1.9em; font-weight: 900; }
+  .cell.wait { box-shadow: inset 0 0 0 3px #FDBA74; animation: blink 1s ease-in-out infinite alternate; }
+  @keyframes blink { to { background: #FED7AA; } }
+  .plist { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .pi { display: flex; gap: 8px; align-items: center; text-align: left; background: var(--card); padding: 10px 12px; border-radius: 12px; border: 2px solid transparent; }
+  .pi b { font-size: 18px; color: var(--brand); min-width: 28px; }
+  .pi .pt { font-size: 14px; line-height: 1.35; flex: 1; word-break: keep-all; }
+  .pi .tag { flex: none; }
+  .pi.used { border-color: var(--mark); background: #FEF9C3; }
+  .pi.used b::after { content: " ✓"; }
+  .mine { font-size: 12px; font-weight: 800; color: #9A3412; background: #FEF3C7; padding: 3px 8px; border-radius: 99px; }
+  .timer { margin-left: auto; font-weight: 900; font-size: 18px; color: var(--brand); }
+  .timer.urgent { color: var(--bad); }
   .hint { font-size: 13px; color: var(--muted); text-align: center; margin: 8px 0 4px; line-height: 1.5; }
   .row { display: flex; gap: 8px; margin-top: 8px; }
   .row .btn { flex: 1; font-size: 15px; padding: 11px; }
@@ -57,7 +72,8 @@
   /* 번호 카드 */
   .draws { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
   .draw { background: var(--card); border-radius: 16px; padding: 14px; box-shadow: 0 2px 10px rgba(124, 45, 18, .08); }
-  .draw .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .draw .head { display: flex; align-items: center; gap: 6px 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .draw .head > * { white-space: nowrap; }
   .draw .num { font-size: 28px; font-weight: 900; color: var(--brand); }
   .tag { font-size: 12px; font-weight: 800; padding: 3px 8px; border-radius: 99px; color: #fff; }
   .tag.감사 { background: var(--gam); } .tag.버킷 { background: var(--bucket); }
@@ -69,6 +85,8 @@
   .chip.sel { background: var(--brand); color: #fff; }
   .saved { margin-top: 8px; font-size: 14px; color: var(--ok); font-weight: 700; }
   .result { font-size: 16px; font-weight: 800; padding: 10px 12px; border-radius: 12px; background: var(--soft); }
+  .result { font-size: 22px; }
+  .result .mya { font-size: 14px; font-weight: 600; margin-left: 8px; opacity: .8; }
   .result.ok { background: #DCFCE7; color: var(--ok); } .result.bad { background: #FEE2E2; color: var(--bad); }
   .empty { text-align: center; color: var(--muted); padding: 22px 10px; background: var(--card); border-radius: 16px; line-height: 1.5; }
 
@@ -203,7 +221,7 @@ let phase = ROOM ? "wait" : "noroom";
 let pendingName = "", warnName = false, joinTimer = null;
 let drafts = {};         // 입력 중인 글자 {번호: 글자}
 let lastMarked = new Set(), lastLines = 0, firstRender = true;
-let pickIdx = -1;
+let pickIdx = -1, deadline = 0, autoFilled = false;
 
 const $ = id => document.getElementById(id);
 
@@ -220,6 +238,7 @@ setInterval(renderDot, 3000);
 function onMsg(topic, d) {
   if (topic === BASE + "/state") {
     const before = S;
+    if (!before || before.ts !== d.ts) deadline = d.dl > 0 ? Date.now() + d.dl * 1000 : 0;
     S = d;
     if (phase === "wait") {
       phase = "login";
@@ -262,15 +281,20 @@ function finishJoin(rec) {
   const name = gbNorm(pendingName);
   const key = gbKey(name);
   if (rec) me = { name: rec.name || name, key, grid: rec.grid, guesses: rec.guesses || {}, ts: rec.ts || Date.now() };
-  else { me = { name, key, grid: gbRandomGrid(S.total || 25), guesses: {}, ts: Date.now() }; push(); }
+  else { me = { name, key, grid: Array(25).fill(0), guesses: {}, ts: Date.now() }; push(); }
   phase = "play";
   save({ room: ROOM, name });
-  lastMarked = new Set(drawnList().filter(n => me.grid.includes(n)));
-  lastLines = gbCountLines(me.grid, new Set(drawnList()));
+  const h0 = hits();
+  lastMarked = h0; lastLines = gbCountLines(me.grid, h0);
   render();
 }
 function push() { me.ts = Date.now(); bus && bus.publish(BASE + "/p/" + me.key, me, true); }
 
+function hits() {
+  // 맞힌 번호만 체크 (공개된 번호 중 내 답이 정답인 것)
+  const items = (S && S.items) || {};
+  return new Set(((S && S.rev) || []).filter(n => items[n] && items[n].owner && me && gbNorm(me.guesses[n]) === gbNorm(items[n].owner)));
+}
 function drawnList() { return S && Array.isArray(S.drawn) ? S.drawn : []; }
 function locked() { return drawnList().length > 0; }
 function names() { return S && Array.isArray(S.names) ? S.names : []; }
@@ -327,7 +351,10 @@ function renderPlay() {
   }
   pendingRender = false;
   const drawn = drawnList();
-  const dset = new Set(drawn);
+  // 판을 다 못 채운 채로 게임이 시작되면 빈칸은 자동으로 채움
+  if (locked() && me.grid.includes(0) && !autoFilled) { autoFilled = true; fillEmpty(); push(); }
+  const dset = hits();
+  const drawnSet = new Set(drawn);
   const lines = gbCountLines(me.grid, dset);
   const lineCells = new Set();
   GB_LINES.forEach(L => { if (L.every(i => dset.has(me.grid[i]))) L.forEach(i => lineCells.add(i)); });
@@ -344,14 +371,22 @@ function renderPlay() {
   const focusN = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.n : null;
   const caret = focusN ? document.activeElement.selectionStart : null;
 
+  const revSet = new Set((S && S.rev) || []);
   let html = `<div class="grid ${editable ? "editable" : ""}" id="grid">` + me.grid.map((n, i) => {
     const m = dset.has(n);
     const isNew = m && !lastMarked.has(n) && !firstRender;
-    return `<div class="cell ${m ? "marked" : ""} ${lineCells.has(i) ? "inline" : ""} ${isNew ? "new" : ""} ${pickIdx === i ? "pick" : ""}" data-i="${i}">${n}</div>`;
+    const miss = !m && n && revSet.has(n);
+    const wait = !m && n && drawnSet.has(n) && !revSet.has(n);
+    return `<div class="cell ${m ? "marked" : ""} ${miss ? "miss" : ""} ${wait ? "wait" : ""} ${n ? "" : "emptyc"} ${lineCells.has(i) ? "inline" : ""} ${isNew ? "new" : ""} ${pickIdx === i ? "pick" : ""}" data-i="${i}">${n || ""}</div>`;
   }).join("") + `</div>`;
   if (editable) {
-    html += `<div class="hint">칸을 누르면 원하는 번호로 바꿀 수 있어요 (1~${S.total}번 중 25개).<br>첫 번호를 뽑으면 빙고판이 고정돼요.</div>
-      <div class="row"><button class="btn ghost" id="shuffle">🔀 번호 다시 섞기</button></div>`;
+    const filled = me.grid.filter(Boolean).length;
+    const list = (S && S.list) || [];
+    html += `<div class="hint"><b>${filled} / 25칸</b> · 아래 목록에서 마음에 드는 번호를 눌러 빙고판에 넣어요.<br>넣은 칸을 누르면 빠져요. 첫 번호를 뽑으면 빙고판이 고정돼요.</div>
+      <div class="row"><button class="btn ghost" id="autoFill">🔀 빈칸 자동 채우기</button><button class="btn ghost" id="clearAll">↺ 모두 지우기</button></div>
+      <div class="plist" id="plist">${list.map(x => `<button class="pi ${me.grid.includes(x.n) ? "used" : ""}" data-n="${x.n}"><b>${x.n}</b><span class="tag ${gbEsc(x.type)}">${x.type === "버킷" ? "버킷" : "감사"}</span><span class="pt">${gbEsc(x.text)}</span></button>`).join("")}</div>`;
+  } else if (me.grid.some(Boolean)) {
+    html += `<div class="hint">맞히면 ⭕ 자동 체크, 틀리거나 못 쓰면 ❌ (❌ 칸은 빙고가 안 돼요)</div>`;
   }
 
   const cur = (S && S.cur) || [];
@@ -362,11 +397,11 @@ function renderPlay() {
   cur.forEach(n => {
     const it = items[n] || {};
     const g = me.guesses[n] || "";
-    html += `<div class="draw"><div class="head"><span class="num">${n}번</span>${it.type ? `<span class="tag ${gbEsc(it.type)}">${it.type === "버킷" ? "버킷리스트" : "감사제목"}</span>` : ""}</div>
+    html += `<div class="draw"><div class="head"><span class="num">${n}번</span>${it.type ? `<span class="tag ${gbEsc(it.type)}">${it.type === "버킷" ? "버킷리스트" : "감사제목"}</span>` : ""}${me.grid.includes(n) ? `<span class="mine">내 판에 있음!</span>` : ""}${!rev.has(n) && deadline ? `<span class="timer" data-timer>⏱</span>` : ""}</div>
       <div class="text">${gbEsc(it.text || "")}</div>`;
     if (rev.has(n)) {
       const ok = g && gbNorm(g) === gbNorm(it.owner);
-      html += `<div class="result ${g ? (ok ? "ok" : "bad") : ""}">${ok ? "✅ 정답!" : g ? "❌ 아쉬워요" : "정답"} · 주인은 <b>${gbEsc(it.owner)}</b>${g && !ok ? ` (내 답: ${gbEsc(g)})` : ""}</div>`;
+      html += `<div class="result ${ok ? "ok" : "bad"}">${ok ? "⭕" : "❌"} <b>${gbEsc(it.owner)}</b>${!ok ? `<span class="mya">${g ? `내 답: ${gbEsc(g)}` : "답 안 씀"}</span>` : ""}</div>`;
     } else {
       const val = drafts[n] != null ? drafts[n] : g;
       html += `<input data-n="${n}" placeholder="누구의 ${it.type === "버킷" ? "버킷리스트" : "감사제목"}일까요? 이름 입력" value="${gbEsc(val)}" autocomplete="off" enterkeyhint="done">
@@ -389,8 +424,16 @@ function renderPlay() {
 
   // 이벤트
   if (editable) {
-    $("grid").onclick = e => { const c = e.target.closest(".cell"); if (c) openPick(+c.dataset.i); };
-    $("shuffle").onclick = () => { me.grid = gbRandomGrid(S.total); push(); render(); };
+    $("grid").onclick = e => { const c = e.target.closest(".cell"); if (!c) return; const i = +c.dataset.i;
+      if (me.grid[i]) { me.grid[i] = 0; pickIdx = -1; push(); } else pickIdx = pickIdx === i ? -1 : i;
+      render(); };
+    $("plist").onclick = e => { const b = e.target.closest(".pi"); if (!b) return; const n = +b.dataset.n;
+      const j = me.grid.indexOf(n);
+      if (j >= 0) { me.grid[j] = 0; }
+      else { const at = pickIdx >= 0 && !me.grid[pickIdx] ? pickIdx : me.grid.indexOf(0); if (at < 0) { showBanner(`25칸이 다 찼어요<small>칸을 눌러 빼고 다시 넣어 주세요</small>`); return; } me.grid[at] = n; }
+      pickIdx = -1; push(); render(); };
+    $("autoFill").onclick = () => { fillEmpty(); push(); render(); };
+    $("clearAll").onclick = () => { me.grid = Array(25).fill(0); pickIdx = -1; push(); render(); };
   }
   app.querySelectorAll("input[data-n]").forEach(inp => {
     const n = inp.dataset.n;
@@ -408,9 +451,21 @@ function renderPlay() {
   // 새로 빙고 줄이 생기면 축하
   if (!firstRender && lines > lastLines) showBanner(`🎉 빙고!<small>${lines}줄 완성 · 크게 "빙고!" 외쳐 주세요</small>`);
   lastLines = lines;
-  lastMarked = new Set(drawn.filter(n => me.grid.includes(n)));
+  lastMarked = dset;
   firstRender = false;
+  tickTimer();
 }
+function fillEmpty() {
+  const total = (S && S.total) || 25;
+  const rest = Array.from({ length: total }, (_, i) => i + 1).filter(n => !me.grid.includes(n));
+  for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+  me.grid = me.grid.map(n => n || rest.pop() || 0);
+}
+function tickTimer() {
+  const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  document.querySelectorAll("[data-timer]").forEach(el => { el.textContent = left > 0 ? `⏱ ${left}초` : "⏱ 시간 끝!"; el.classList.toggle("urgent", left <= 3); });
+}
+setInterval(tickTimer, 250);
 
 function chipsHtml(n, typed) {
   const t = gbNorm(typed);
